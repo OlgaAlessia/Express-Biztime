@@ -1,7 +1,8 @@
 const express = require("express");
+const slugify = require('slugify');
 const router = new express.Router();
 const db = require("../db");
-const ExpressError = require("../expressError")
+const ExpressError = require("../expressError");
 
 /**
  * Returns list of companies, like `{companies: [{code, name}, ...]}`
@@ -17,17 +18,24 @@ router.get('/', async (req, res, next) => {
 
 
 /**
- * Return obj of company: `{company: {code, name, description}}`
+ * Return obj of company: `{company: {code, name, description, industries: [name] }}`
  * If the company given cannot be found, this should return a 404 status response.
  */
 router.get('/:code', async (req, res, next) => {
     try {
-        const myQuery = await db.query(`SELECT * FROM companies WHERE code = $1`, [req.params.code]);
+        const myQuery = await db.query(`
+        SELECT c.code, c.name, c.description, i.industry
+        FROM companies AS c
+        LEFT JOIN companies_industries AS c_i ON c.code = c_i.company_code
+        LEFT JOIN industries AS i ON c_i.industry_code = i.code
+        WHERE c.code = $1`, [req.params.code]);
 
         if (myQuery.rows.length === 0) {
             throw new ExpressError(`Can't find company with code of '${req.params.code}`, 404);
         }
-        return res.json({ company: myQuery.rows[0] });
+        const { code, name, description } = myQuery.rows[0]; //this part is the same
+        const industries = myQuery.rows.map(r => r.industry);
+        return res.json({ company: {code, name, description, industries }});
     } catch (e) {
         return next(e);
     }
@@ -37,13 +45,19 @@ router.get('/:code', async (req, res, next) => {
 /**
  * Adds a company. Needs to be given JSON like: `{code, name, description}`
  * Returns obj of new company:  `{company: {code, name, description}}` 
+ * change the route so that they don’t provide a code directly, but you make this by using slugify() on the given name
  */
 router.post('/', async (req, res, next) => {
     try {
-        const { code, name, description } = req.body;
-        if (code == null || name == null) {
-            throw new ExpressError('Code and Name are required', 404);
+        const { name, description } = req.body;
+        if (name == null || name == "") {
+            throw new ExpressError('Name is required', 404);
         }
+        const code = slugify(name, {
+            lower: true,      // convert to lower case, defaults to `false`
+            strict: true     // strip special characters except replacement, defaults to `false`
+        });
+        if (description == "") description = null;
         const myQuery = await db.query('INSERT INTO companies (code, name, description) VALUES ($1, $2, $3) RETURNING code, name, description', [code, name, description]);
         return res.status(201).json({ company: myQuery.rows[0] })
     } catch (e) {
